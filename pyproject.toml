@@ -1,0 +1,19 @@
+[project]
+name = "token-scout"
+version = "0.1.0"
+description = "MCP server that finds free LLM models across providers"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Jack C Crawford"},
+    {name = "Rosegarden"},
+]
+dependencies = ["fastmcp>=2.0.0"]
+
+[project.scripts]
+token-scout = "src.server:main"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
