@@ -6,8 +6,6 @@ you call models directly. No proxy, no middleman.
 """
 
 import os
-from datetime import datetime, timezone
-from pathlib import Path
 
 from fastmcp import FastMCP
 
@@ -121,9 +119,39 @@ def _has_key(provider):
     key = os.environ.get(provider["key_env"], "")
     return bool(key)
 
+def _params_to_sortable(params: str) -> float:
+    """Convert params string to a number for sorting. Smaller = faster."""
+    p = params.lower().replace("-", "").replace("moe", "")
+    try:
+        if "t" in p:
+            return float(p.replace("t", "")) * 1000
+        if "b" in p:
+            return float(p.replace("b", ""))
+        return 999  # unknown → sort last for speed
+    except ValueError:
+        return 999
+
+def _model_result(prov, model):
+    """Build a result dict for a provider/model pair."""
+    return {
+        "provider": prov["name"],
+        "model": model["id"],
+        "model_name": model["name"],
+        "params": model["params"],
+        "endpoint": prov["endpoint"],
+        "api_style": prov["api_style"],
+        "api_key_env": prov["key_env"],
+        "context_len": model.get("context", 0),
+        "strengths": model.get("strengths", []),
+        "quota": {
+            "requests_per_day": model.get("rpd", 0),
+            "tokens_per_minute": model.get("tpm", 0),
+        },
+    }
+
 def _scout(query: str, prefer: str) -> dict:
-    if not query:
-        # Status view
+    if not query and not prefer:
+        # Status view — no query, no ranking preference
         providers_status = []
         total_configured = 0
         total_models = 0
@@ -135,14 +163,38 @@ def _scout(query: str, prefer: str) -> dict:
             providers_status.append({
                 "name": p["name"],
                 "configured": configured,
-                "models": p["models"],
+                "models": p["models"] if configured else [],
             })
         return {
             "providers": providers_status,
             "summary": f"{total_configured} providers configured, {total_models} models available",
         }
 
-    # Search
+    if not query and prefer:
+        # All configured models, ranked by prefer strategy
+        results = []
+        for prov in PROVIDERS:
+            if not _has_key(prov):
+                continue
+            for model in prov["models"]:
+                results.append(_model_result(prov, model))
+
+        if prefer == "speed":
+            results.sort(key=lambda r: (
+                0 if "fast" in r["strengths"] else 1,
+                _params_to_sortable(r["params"]),
+            ))
+        elif prefer == "context":
+            results.sort(key=lambda r: -r.get("context_len", 0))
+        elif prefer == "quota":
+            results.sort(key=lambda r: -r["quota"]["requests_per_day"])
+
+        return {
+            "matches": results,
+            "summary": f"{len(results)} models available across {len(set(r['provider'] for r in results))} providers",
+        }
+
+    # Search by query
     query_lower = query.lower()
     terms = query_lower.replace("/", " ").replace("-", " ").replace(":", " ").split()
     scores = {}
@@ -159,33 +211,24 @@ def _scout(query: str, prefer: str) -> dict:
         if not _has_key(prov):
             continue
         model = prov["models"][mi]
-        results.append({
-            "provider": prov["name"],
-            "model": model["id"],
-            "model_name": model["name"],
-            "params": model["params"],
-            "endpoint": prov["endpoint"],
-            "api_style": prov["api_style"],
-            "api_key_env": prov["key_env"],
-            "context_len": model.get("context", 0),
-            "strengths": model.get("strengths", []),
-            "quota": {
-                "requests_remaining": model.get("rpd", 0),
-                "tokens_remaining": model.get("tpm", 0) * 60,  # rough hourly
-            },
-            "_score": score,
-        })
+        r = _model_result(prov, model)
+        r["_score"] = score
+        results.append(r)
 
-    # Secondary sort by prefer
+    # Secondary sort by prefer (stable sort preserves relevance within ties)
     if prefer == "speed":
-        results.sort(key=lambda r: (-r["_score"], -r.get("context_len", 0)))
+        results.sort(key=lambda r: (
+            -r["_score"],
+            0 if "fast" in r["strengths"] else 1,
+            _params_to_sortable(r["params"]),
+        ))
     elif prefer == "context":
         results.sort(key=lambda r: (-r["_score"], -r.get("context_len", 0)))
     elif prefer == "quota":
-        results.sort(key=lambda r: (-r["_score"], -r["quota"]["requests_remaining"]))
+        results.sort(key=lambda r: (-r["_score"], -r["quota"]["requests_per_day"]))
 
     for r in results:
-        del r["_score"]
+        r.pop("_score", None)
 
     return {
         "matches": results,
@@ -208,10 +251,10 @@ Find available free LLM models across providers.
 Args:
     query: Search by model name, provider, size, capability, or strength.
            Examples: "llama", "deepseek", "70b", "groq", "reasoning", "fast", "code"
-           Empty string returns full status of all providers.
+           Empty string returns status, or all models ranked if prefer is set.
     prefer: Optional ranking strategy.
-           "quota"   — most remaining requests first
-           "speed"   — fastest models first
+           "quota"   — most requests per day first
+           "speed"   — smallest/fastest models first (prefers "fast" strength)
            "context" — largest context window first
 
 Returns:
@@ -248,7 +291,7 @@ def token_scout(query: str = "", prefer: str = "") -> str:
             f"    api_style: {m['api_style']}\n"
             f"    api_key_env: {m['api_key_env']}\n"
             f"    context: {ctx_str} | strengths: {strengths}\n"
-            f"    quota: ~{q.get('requests_remaining', '?')} req/day"
+            f"    quota: ~{q.get('requests_per_day', '?')} req/day, ~{q.get('tokens_per_minute', '?')} tok/min"
         )
 
     lines.append(f"\n{summary}")
