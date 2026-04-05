@@ -1,8 +1,9 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::env;
 
-use crate::registry::Provider;
+use crate::registry::{Compatibility, Provider, ReasoningFormat, ToolFormat, ToolReliability};
 use crate::tracker::QuotaTracker;
 
 #[derive(Debug, Serialize)]
@@ -17,12 +18,131 @@ pub struct ScoutResult {
     pub context_len: u32,
     pub speed_tps: u32,
     pub strengths: Vec<String>,
+    pub prompt_cost: f64,
+    pub completion_cost: f64,
+    pub compat: Compatibility,
     pub quota: crate::tracker::QuotaStatus,
+}
+
+/// Hard constraints — models that don't match are excluded before ranking.
+#[derive(Debug, Default, Deserialize)]
+pub struct Require {
+    /// "api_separated", "inline_tags", "hidden", "none", "any" (default: "any")
+    #[serde(default)]
+    pub reasoning_format: String,
+    /// "anthropic", "openai_function", "ollama", "none", "any" (default: "any")
+    #[serde(default)]
+    pub tool_format: String,
+    /// "native", "claimed", "none", "any" (default: "any")
+    #[serde(default)]
+    pub tool_reliability: String,
+    /// Minimum context length in tokens (0 = no minimum)
+    #[serde(default)]
+    pub min_context: u32,
+    /// Minimum max_completion tokens (0 = no minimum)
+    #[serde(default)]
+    pub min_completion: u32,
+    /// Required modality substring, e.g. "text" (empty = any)
+    #[serde(default)]
+    pub modality: String,
+}
+
+impl Require {
+    fn matches(&self, model: &crate::registry::Model) -> bool {
+        let c = &model.compat;
+
+        // Reasoning format
+        if !self.reasoning_format.is_empty() && self.reasoning_format != "any" {
+            let matches = match self.reasoning_format.as_str() {
+                "api_separated" => c.reasoning_format == ReasoningFormat::ApiSeparated,
+                "inline_tags" => c.reasoning_format == ReasoningFormat::InlineTags,
+                "hidden" => c.reasoning_format == ReasoningFormat::Hidden,
+                "none" => c.reasoning_format == ReasoningFormat::None,
+                _ => true,
+            };
+            if !matches { return false; }
+        }
+
+        // Tool format
+        if !self.tool_format.is_empty() && self.tool_format != "any" {
+            let matches = match self.tool_format.as_str() {
+                "anthropic" => c.tool_format == ToolFormat::Anthropic,
+                "openai_function" => c.tool_format == ToolFormat::OpenAIFunction,
+                "ollama" => c.tool_format == ToolFormat::Ollama,
+                "none" => c.tool_format == ToolFormat::None,
+                _ => true,
+            };
+            if !matches { return false; }
+        }
+
+        // Tool reliability
+        if !self.tool_reliability.is_empty() && self.tool_reliability != "any" {
+            let matches = match self.tool_reliability.as_str() {
+                "native" => c.tool_reliability == ToolReliability::Native,
+                "claimed" => c.tool_reliability == ToolReliability::Claimed || c.tool_reliability == ToolReliability::Native,
+                "none" => c.tool_reliability == ToolReliability::None,
+                _ => true,
+            };
+            if !matches { return false; }
+        }
+
+        // Context length
+        if self.min_context > 0 && model.context_len > 0 && model.context_len < self.min_context {
+            return false;
+        }
+
+        // Max completion
+        if self.min_completion > 0 && c.max_completion > 0 && c.max_completion < self.min_completion {
+            return false;
+        }
+
+        // Modality
+        if !self.modality.is_empty() && !c.modality.contains(&self.modality) {
+            return false;
+        }
+
+        true
+    }
+}
+
+/// Max cost per 1K tokens (prompt + completion averaged).
+/// Read from TOKEN_SCOUT_MAX_COST env var. Default: 0.001 ($1/M tokens).
+/// Set to 0 for free only. Set to 999 for no limit.
+fn max_cost_per_1k() -> f64 {
+    env::var("TOKEN_SCOUT_MAX_COST")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(0.001)
+}
+
+fn within_cost(model: &crate::registry::Model) -> bool {
+    // Local/free models always pass
+    if model.prompt_cost == 0.0 && model.completion_cost == 0.0 {
+        return true;
+    }
+    let max = max_cost_per_1k();
+    if max >= 999.0 {
+        return true;
+    }
+    // Average cost per token, scaled to per-1K
+    let cost_per_1k = (model.prompt_cost + model.completion_cost) * 500.0;
+    cost_per_1k <= max
 }
 
 pub fn scout(
     query: &str,
     prefer: &str,
+    registry: &[Provider],
+    index: &HashMap<String, Vec<(usize, usize)>>,
+    tracker: &mut QuotaTracker,
+) -> Value {
+    scout_with_require(query, prefer, &Require::default(), registry, index, tracker)
+}
+
+pub fn scout_with_require(
+    query: &str,
+    prefer: &str,
+    require: &Require,
     registry: &[Provider],
     index: &HashMap<String, Vec<(usize, usize)>>,
     tracker: &mut QuotaTracker,
@@ -73,6 +193,16 @@ pub fn scout(
         }
         let model = &provider.models[mi];
 
+        // Cost gate — filter before anything else
+        if !within_cost(model) {
+            continue;
+        }
+
+        // Compatibility requirements — hard filter
+        if !require.matches(model) {
+            continue;
+        }
+
         if !tracker.has_quota(&provider.name, &model.id, model.rpd, model.tpd) {
             continue;
         }
@@ -96,6 +226,9 @@ pub fn scout(
             context_len: model.context_len,
             speed_tps: model.speed_tps,
             strengths: model.strengths.clone(),
+            prompt_cost: model.prompt_cost,
+            completion_cost: model.completion_cost,
+            compat: model.compat.clone(),
             quota,
         }, score));
     }

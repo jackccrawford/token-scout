@@ -6,7 +6,7 @@ mod tracker;
 use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
 
-use registry::{build_index, build_registry, discover_ollama_constellation};
+use registry::{build_index, build_registry, discover_ollama_constellation, discover_openrouter_live};
 use tracker::QuotaTracker;
 
 fn main() {
@@ -46,10 +46,24 @@ fn main() {
         let method = request.get("method").and_then(|m| m.as_str()).unwrap_or("");
         let params = request.get("params").cloned().unwrap_or(json!({}));
 
-        // Lazy constellation discovery — runs once on first scout/status call
-        if !discovered && (method == "scout" || method == "status") {
+        // Lazy discovery — runs once on first scout/status call
+        if !discovered && (method == "scout" || method == "status" || method == "discover") {
+            // Ollama constellation (local machines)
             let ollama_providers = discover_ollama_constellation();
             registry.extend(ollama_providers);
+
+            // OpenRouter live (cloud — free and cheap models)
+            let openrouter_models = discover_openrouter_live();
+            if !openrouter_models.is_empty() {
+                registry.push(registry::Provider {
+                    name: "openrouter-live".into(),
+                    endpoint: "https://openrouter.ai/api/v1".into(),
+                    api_style: registry::ApiStyle::OpenAI,
+                    models: openrouter_models,
+                    api_key_env: "OPENROUTER_API_KEY".into(),
+                });
+            }
+
             index = build_index(&registry);
             discovered = true;
         }
@@ -58,7 +72,10 @@ fn main() {
             "scout" => {
                 let query = params.get("query").and_then(|q| q.as_str()).unwrap_or("");
                 let prefer = params.get("prefer").and_then(|p| p.as_str()).unwrap_or("");
-                Ok(scout::scout(query, prefer, &registry, &index, &mut tracker))
+                let require: scout::Require = params.get("require")
+                    .and_then(|r| serde_json::from_value(r.clone()).ok())
+                    .unwrap_or_default();
+                Ok(scout::scout_with_require(query, prefer, &require, &registry, &index, &mut tracker))
             }
             "status" => {
                 Ok(scout::scout("", "", &registry, &index, &mut tracker))
