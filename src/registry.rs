@@ -760,6 +760,93 @@ fn build_static_registry() -> Vec<Provider> {
                 },
             ],
         },
+        Provider {
+            name: "fireworks".into(),
+            endpoint: "https://api.fireworks.ai/inference/v1".into(),
+            api_style: ApiStyle::OpenAI,
+            api_key_env: "FIREWORKS_API_KEY".into(),
+            models: vec![
+                Model {
+                    id: "accounts/fireworks/models/llama-v3p1-405b-instruct".into(),
+                    name: "Llama 3.1 405B".into(),
+                    params: "405B".into(),
+                    rpm: 10, rpd: 999_999, tpm: 50_000, tpd: 999_999_999,
+                    context_len: 131_072, speed_tps: 0,
+                    strengths: vec!["chat".into(), "code".into(), "reasoning".into(), "deep-context".into()],
+                ..Default::default()
+                },
+                Model {
+                    id: "accounts/fireworks/models/deepseek-r1".into(),
+                    name: "DeepSeek R1".into(),
+                    params: "671B-MoE".into(),
+                    rpm: 10, rpd: 999_999, tpm: 50_000, tpd: 999_999_999,
+                    context_len: 64_000, speed_tps: 0,
+                    strengths: vec!["reasoning".into(), "code".into(), "deep-context".into()],
+                ..Default::default()
+                },
+            ],
+        },
+        Provider {
+            name: "sambanova".into(),
+            endpoint: "https://api.sambanova.ai/v1".into(),
+            api_style: ApiStyle::OpenAI,
+            api_key_env: "SAMBANOVA_API_KEY".into(),
+            models: vec![
+                Model {
+                    id: "Meta-Llama-3.3-70B-Instruct".into(),
+                    name: "Llama 3.3 70B".into(),
+                    params: "70B".into(),
+                    rpm: 30, rpd: 14_400, tpm: 100_000, tpd: 1_000_000,
+                    context_len: 128_000, speed_tps: 0,
+                    strengths: vec!["fast".into(), "chat".into(), "code".into(), "reasoning".into()],
+                ..Default::default()
+                },
+                Model {
+                    id: "Qwen2.5-72B-Instruct".into(),
+                    name: "Qwen 2.5 72B".into(),
+                    params: "72B".into(),
+                    rpm: 30, rpd: 14_400, tpm: 100_000, tpd: 1_000_000,
+                    context_len: 128_000, speed_tps: 0,
+                    strengths: vec!["chat".into(), "code".into(), "reasoning".into()],
+                ..Default::default()
+                },
+            ],
+        },
+        Provider {
+            name: "cohere".into(),
+            endpoint: "https://api.cohere.com/v2".into(),
+            api_style: ApiStyle::Custom,
+            api_key_env: "COHERE_API_KEY".into(),
+            models: vec![
+                Model {
+                    id: "command-r-plus".into(),
+                    name: "Command R+".into(),
+                    params: "104B".into(),
+                    rpm: 20, rpd: 1_000, tpm: 100_000, tpd: 1_000_000,
+                    context_len: 128_000, speed_tps: 0,
+                    strengths: vec!["chat".into(), "reasoning".into(), "deep-context".into()],
+                ..Default::default()
+                },
+                Model {
+                    id: "embed-v4.0".into(),
+                    name: "Embed 4".into(),
+                    params: "?".into(),
+                    rpm: 20, rpd: 1_000, tpm: 100_000, tpd: 1_000_000,
+                    context_len: 0, speed_tps: 0,
+                    strengths: vec!["embedding".into()],
+                ..Default::default()
+                },
+                Model {
+                    id: "rerank-v3.5".into(),
+                    name: "Rerank 3.5".into(),
+                    params: "?".into(),
+                    rpm: 20, rpd: 1_000, tpm: 100_000, tpd: 1_000_000,
+                    context_len: 0, speed_tps: 0,
+                    strengths: vec!["rerank".into()],
+                ..Default::default()
+                },
+            ],
+        },
     ]
 }
 
